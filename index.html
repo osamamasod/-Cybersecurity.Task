@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AES-256 File Encryption/Decryption</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>AES-256 File Encryption/Decryption</h1>
+
+        <label for="fileInput">Select File:</label>
+        <input type="file" id="fileInput">
+
+        <label for="password">Enter Password:</label>
+        <input type="password" id="password" placeholder="Password" />
+
+        <label for="outputFile">Output File Name:</label>
+        <input type="text" id="outputFile" placeholder="output.enc" />
+
+        <button id="encryptBtn">Encrypt</button>
+        <button id="decryptBtn">Decrypt</button>
+
+        <p id="status"></p>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
