@@ -1,10 +1,12 @@
-// Derive the AES key from the password using PBKDF2
+
+// Derives a secure AES-GCM key from the user password and random salt
 async function deriveKey(password, salt) {
     const encoder = new TextEncoder();
     const passwordBuffer = encoder.encode(password);
 
     try {
-        const baseKey = await window.crypto.subtle.importKey(
+        // Import password into a base crypto key
+        const baseKey = await crypto.subtle.importKey(
             'raw',
             passwordBuffer,
             { name: 'PBKDF2' },
@@ -12,13 +14,12 @@ async function deriveKey(password, salt) {
             ['deriveKey']
         );
 
-        console.log('Base Key Imported:', baseKey);
-
-        return await window.crypto.subtle.deriveKey(
+        // Derive a strong AES-GCM encryption key from the base key
+        return await crypto.subtle.deriveKey(
             {
                 name: 'PBKDF2',
                 salt: salt,
-                iterations: 100000,
+                iterations: 100000, // High iteration count for security
                 hash: 'SHA-256'
             },
             baseKey,
@@ -26,150 +27,134 @@ async function deriveKey(password, salt) {
             false,
             ['encrypt', 'decrypt']
         );
-    } catch (err) {
-        console.error('Error in deriveKey:', err);
-        throw err;  // Re-throw the error to be handled later
+    } catch (error) {
+        console.error('Error deriving key:', error);
+        throw error;
     }
 }
 
-// Encrypt the file
-async function encryptFile() {
+// Creates a download link for a blob and triggers it automatically
+function triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url); // Clean up the temporary URL
+}
+
+// Updates the status message on the page
+function showStatus(message) {
+    const status = document.getElementById('status');
+    status.textContent = message;
+}
+
+// Retrieves the user input values (file, password, output filename)
+function getInputs() {
     const fileInput = document.getElementById('fileInput');
     const passwordInput = document.getElementById('password');
     const outputFile = document.getElementById('outputFile');
-    const status = document.getElementById('status');
 
-    if (!fileInput.files.length || !passwordInput.value || !outputFile.value) {
-        status.textContent = 'Please fill in all fields.';
+    return {
+        file: fileInput.files[0],
+        password: passwordInput.value,
+        outputFileName: outputFile.value
+    };
+}
+
+
+
+// Handles the encryption flow
+async function encryptFile() {
+    const { file, password, outputFileName } = getInputs();
+    if (!file || !password || !outputFileName) {
+        showStatus('Please fill in all fields.');
         return;
     }
 
-    const file = fileInput.files[0];
-    const password = passwordInput.value;
-    const salt = window.crypto.getRandomValues(new Uint8Array(16)); // Generate random salt
-    const iv = window.crypto.getRandomValues(new Uint8Array(12)); // Initialization vector (12 bytes for AES-GCM)
-
-    console.log('Encryption Parameters:');
-    console.log('Salt:', salt);
-    console.log('IV:', iv);
+    // : Generate random salt and IV (Initialization Vector)
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
 
     try {
+        // : Derive a key from the password and salt
         const key = await deriveKey(password, salt);
+
+        //  Read file content into an ArrayBuffer
         const fileArrayBuffer = await file.arrayBuffer();
 
-        console.log('File Data:', fileArrayBuffer);
-
-        // Encrypt data
-        const encryptedData = await window.crypto.subtle.encrypt(
+        //  Encrypt the file using AES-GCM
+        const encrypted = await crypto.subtle.encrypt(
             { name: 'AES-GCM', iv: iv },
             key,
             fileArrayBuffer
         );
 
-        console.log('Encrypted Data:', encryptedData);
+        //  Separate ciphertext and authentication tag
+        const encryptedArray = new Uint8Array(encrypted);
+        const authTag = encryptedArray.slice(-16); // Last 16 bytes
+        const ciphertext = encryptedArray.slice(0, -16);
 
-        // Create an ArrayBuffer with the encrypted data and authentication tag
-        const encryptedDataArray = new Uint8Array(encryptedData);
-        const authTag = encryptedDataArray.slice(-16); // Last 16 bytes are the authentication tag
-        const ciphertext = encryptedDataArray.slice(0, encryptedDataArray.length - 16);
-
-        console.log('Ciphertext:', ciphertext);
-        console.log('Authentication Tag:', authTag);
-
-        // Create a Blob containing the salt, iv, encrypted data, and authentication tag
+        //  Bundle salt, IV, ciphertext, and auth tag into one Blob
         const outputBlob = new Blob([salt, iv, ciphertext, authTag], { type: 'application/octet-stream' });
-        const outputUrl = URL.createObjectURL(outputBlob);
 
-        // Trigger download
-        const a = document.createElement('a');
-        a.href = outputUrl;
-        a.download = outputFile.value;
-        a.click();
+        //  Trigger download of the encrypted file
+        triggerDownload(outputBlob, outputFileName);
 
-        status.textContent = 'File encrypted successfully.';
-    } catch (err) {
-        console.error('Encryption Error:', err);
-        status.textContent = `Error: ${err.message}`;
+        showStatus('File encrypted successfully.');
+    } catch (error) {
+        console.error('Encryption Error:', error);
+        showStatus(`Encryption Error: ${error.message}`);
     }
 }
 
-// Decrypt the file
+// Handles the decryption flow
 async function decryptFile() {
-    const fileInput = document.getElementById('fileInput');
-    const passwordInput = document.getElementById('password');
-    const outputFile = document.getElementById('outputFile');
-    const status = document.getElementById('status');
-
-    if (!fileInput.files.length || !passwordInput.value || !outputFile.value) {
-        status.textContent = 'Please fill in all fields.';
+    const { file, password, outputFileName } = getInputs();
+    if (!file || !password || !outputFileName) {
+        showStatus('Please fill in all fields.');
         return;
     }
 
-    const file = fileInput.files[0];
-    const password = passwordInput.value;
-
     try {
+        // : Read the encrypted file into an ArrayBuffer
         const fileBuffer = await file.arrayBuffer();
 
-        // Extract salt, IV, encrypted data, and authentication tag
-        const salt = new Uint8Array(fileBuffer.slice(0, 16)); // First 16 bytes are the salt
-        const iv = new Uint8Array(fileBuffer.slice(16, 28)); // Next 12 bytes are the IV
-        const encryptedData = fileBuffer.slice(28, fileBuffer.byteLength - 16); // The remaining data is the encrypted content
-        const authTag = new Uint8Array(fileBuffer.slice(fileBuffer.byteLength - 16)); // Last 16 bytes are the authentication tag
+        // : Extract salt, IV, encrypted content, and auth tag from file
+        const salt = new Uint8Array(fileBuffer.slice(0, 16));
+        const iv = new Uint8Array(fileBuffer.slice(16, 28));
+        const encryptedData = fileBuffer.slice(28, fileBuffer.byteLength - 16);
+        const authTag = new Uint8Array(fileBuffer.slice(fileBuffer.byteLength - 16));
 
-        // Log the extracted data for debugging
-        console.log('Extracted Salt:', salt);
-        console.log('Extracted IV:', iv);
-        console.log('Extracted Encrypted Data:', encryptedData);
-        console.log('Extracted Authentication Tag:', authTag);
+        // : Derive the same key from the password and extracted salt
+        const key = await deriveKey(password, salt);
 
-        const key = await deriveKey(password, salt); // Ensure same key derivation as encryption
-        console.log('Base Key Imported:', key);
-
-        // Log the decryption params
-        const decryptParams = {
-            name: 'AES-GCM',
-            iv: iv,
-            tagLength: 128 // AES-GCM tag length must be 128 bits (16 bytes)
-        };
-
-        console.log('Decrypt Params:', decryptParams);
-
-        // Concatenate the authentication tag with the encrypted data for decryption
+        // : Merge encryptedData and authTag for AES-GCM decryption
         const dataWithTag = new Uint8Array(encryptedData.byteLength + authTag.byteLength);
-        dataWithTag.set(new Uint8Array(encryptedData), 0); // Copy encrypted data
-        dataWithTag.set(new Uint8Array(authTag), encryptedData.byteLength); // Append the tag
+        dataWithTag.set(new Uint8Array(encryptedData));
+        dataWithTag.set(authTag, encryptedData.byteLength);
 
-        // Decrypt data with the concatenated authentication tag
-        try {
-            const decryptedData = await window.crypto.subtle.decrypt(
-                decryptParams,
-                key,
-                dataWithTag
-            );
-            console.log('Decrypted Data:', decryptedData);
+        // : Decrypt the content
+        const decrypted = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: iv, tagLength: 128 },
+            key,
+            dataWithTag
+        );
 
-            // Create a Blob from the decrypted data
-            const outputBlob = new Blob([decryptedData], { type: 'application/octet-stream' });
-            const outputUrl = URL.createObjectURL(outputBlob);
+        // : Create a Blob from the decrypted content and download it
+        const outputBlob = new Blob([decrypted], { type: 'application/octet-stream' });
+        triggerDownload(outputBlob, outputFileName);
 
-            // Trigger download
-            const a = document.createElement('a');
-            a.href = outputUrl;
-            a.download = outputFile.value;
-            a.click();
-
-            status.textContent = 'File decrypted successfully.';
-        } catch (err) {
-            console.error('Decryption Error with Tag:', err);
-            status.textContent = `Decryption Error: ${err.message}`;
-        }
-    } catch (err) {
-        console.error('General Error:', err);
-        status.textContent = `Error: ${err.message}`;
+        showStatus('File decrypted successfully.');
+    } catch (error) {
+        console.error('Decryption Error:', error);
+        showStatus(`Decryption Error: ${error.message}`);
     }
 }
 
-// Add event listeners to the buttons
+
+
 document.getElementById('encryptBtn').addEventListener('click', encryptFile);
+
+
 document.getElementById('decryptBtn').addEventListener('click', decryptFile);
